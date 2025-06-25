@@ -5,15 +5,13 @@ import {
   getDocs,
   query,
   orderBy,
+  limit,
   addDoc,
   deleteDoc,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { User } from 'firebase/auth';
 
-/**
- * Saves the user's stat, keeps the first-ever snapshot, and rolls over the rest (max 10 total).
- */
 export async function saveUserStats<T extends Record<string, unknown>>(
   user: User,
   category: string,
@@ -21,36 +19,43 @@ export async function saveUserStats<T extends Record<string, unknown>>(
 ) {
   if (!user) throw new Error('User not authenticated');
 
-  // Save current stat to user doc
+  // 1. Save current stat object (overwrites latest)
   const ref = doc(db, 'users', user.uid);
   await setDoc(ref, { [category]: data }, { merge: true });
 
-  // Get history collection
+  // 2. Get history collection reference
   const historyRef = collection(db, 'users', user.uid, 'stats', category, 'history');
 
-  // Fetch existing history (ordered oldest → newest)
-  const q = query(historyRef, orderBy('timestamp', 'asc'));
+  // 3. Load latest snapshot if any
+  const q = query(historyRef, orderBy('timestamp', 'desc'), limit(1));
   const snapshot = await getDocs(q);
-  const entries = snapshot.docs;
+  const latest = snapshot.docs[0]?.data() as (T & { timestamp: number }) | undefined;
 
-  // Always keep the very first snapshot
-  // const first = entries[0];  // we will be keeping this as a option for later
+  const now = Date.now();
+  const oneWeek = 7 * 24 * 60 * 60 * 1000;
 
-  // If more than 10 entries, delete the oldest *after the first*
-  if (entries.length >= 10) {
-    const toDelete = entries[1]; // second entry, first is preserved
-    if (toDelete) {
-      await deleteDoc(toDelete.ref);
-      console.log('[History] Deleted oldest (excluding first) to maintain limit.');
-    }
+  const isTooSoon = latest && now - latest.timestamp < oneWeek;
+  const isSame = latest && JSON.stringify(latest) === JSON.stringify({ ...data, timestamp: latest.timestamp });
+
+  // 4. Always add if no history exists (first ever snapshot)
+  const shouldAddSnapshot = !latest || (!isTooSoon && !isSame);
+
+  if (shouldAddSnapshot) {
+    await addDoc(historyRef, {
+      ...data,
+      timestamp: now,
+    });
+    console.log('[History] New snapshot saved at', new Date(now).toISOString());
+  } else {
+    console.log('[Snapshot Skipped]', data);
   }
 
-  // Save new snapshot
-  const now = Date.now();
-  await addDoc(historyRef, {
-    ...data,
-    timestamp: now,
-  });
-
-  console.log('[History] New snapshot saved at', new Date(now).toISOString());
+  // 5. 🧹 Prune oldest if more than 10 exist
+  const allSnapshots = await getDocs(query(historyRef, orderBy('timestamp', 'asc')));
+  if (allSnapshots.size > 10) {
+    const excess = allSnapshots.size - 10;
+    const docsToDelete = allSnapshots.docs.slice(0, excess);
+    await Promise.all(docsToDelete.map(doc => deleteDoc(doc.ref)));
+    console.log(`[History] Pruned ${excess} old snapshot(s)`);
+  }
 }

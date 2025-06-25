@@ -28,23 +28,11 @@ const EnduranceStatPage: React.FC = () => {
   useEffect(() => {
     if (!user) return;
 
-    const fetchData = async () => {
+    const loadLatestSnapshot = async () => {
       const saved = await loadUserStats<EnduranceFormData & { averageScore: number; globalRank: Rank }>(
         user,
         'endurance'
       );
-      const allHistory = await loadUserHistory<EnduranceFormData & { averageScore: number; globalRank: Rank }>(
-        user,
-        'endurance'
-      );
-
-      setHistory(allHistory);
-      console.log('[History Loaded]', allHistory);
-      console.log('[Saved Stats]', saved);
-
-      if (allHistory.length > 1) {
-        setHistoryIndex(allHistory.length - 1); // Set to most recent
-      }
 
       if (saved) {
         const { averageScore, globalRank, ...inputs } = saved;
@@ -64,9 +52,21 @@ const EnduranceStatPage: React.FC = () => {
       }
 
       setLoading(false);
+
+      // Lazy load full history
+      loadUserHistory<EnduranceFormData & { averageScore: number; globalRank: Rank }>(
+        user,
+        'endurance'
+      ).then((allHistory) => {
+        setHistory(allHistory);
+        if (allHistory.length > 1) {
+          setHistoryIndex(allHistory.length - 1);
+        }
+        console.log('[Lazy History Loaded]', allHistory);
+      });
     };
 
-    fetchData();
+    loadLatestSnapshot();
   }, [user]);
 
   const handleSubmit = async (data: EnduranceFormData) => {
@@ -83,7 +83,7 @@ const EnduranceStatPage: React.FC = () => {
     setFormData(data);
     setResult(ranks);
     setAverage(averageResult);
-    setHistoryIndex(null); // Reset to latest after new submit
+    setHistoryIndex(null);
 
     if (user) {
       await saveUserStats(user, 'endurance', {
@@ -155,10 +155,7 @@ const EnduranceStatPage: React.FC = () => {
           {history.length > 1 && (
             <div className="flex justify-center items-center gap-4 mb-4">
               <button
-                onClick={() => {
-                  console.log('[Go Previous] current index:', historyIndex);
-                  goToPreviousSnapshot();
-                }}
+                onClick={goToPreviousSnapshot}
                 disabled={historyIndex === 0 || historyIndex === null}
                 className="bg-gray-300 px-3 py-1 rounded disabled:opacity-50"
               >
@@ -168,10 +165,7 @@ const EnduranceStatPage: React.FC = () => {
                 Viewing: {historyIndex === null ? 'Latest' : `Snapshot ${historyIndex + 1} of ${history.length}`}
               </span>
               <button
-                onClick={() => {
-                  console.log('[Go Next] current index:', historyIndex);
-                  goToNextSnapshot();
-                }}
+                onClick={goToNextSnapshot}
                 disabled={historyIndex === null || historyIndex >= history.length - 1}
                 className="bg-gray-300 px-3 py-1 rounded disabled:opacity-50"
               >
